@@ -150,6 +150,8 @@ nav.tabs .ic{font-size:22px;display:block;line-height:1.2}
     <datalist id="store-list"></datalist>
     <label class="lbl">折價券內容</label>
     <input id="c-title" placeholder="例如：$10 off、滿 $50 折 $15、買一送一" autocomplete="off">
+    <label class="lbl">條碼號碼（可空，券上條碼下方的數字）</label>
+    <input id="c-code" placeholder="例如：0123456789012345" autocomplete="off">
     <div class="row" style="margin-top:10px">
       <div style="flex:1"><label class="lbl">到期日（可空）</label><input id="c-exp" type="date"></div>
       <div style="flex:1"><label class="lbl">備註（可空）</label><input id="c-note" placeholder="例如：限店內使用"></div>
@@ -163,6 +165,8 @@ nav.tabs .ic{font-size:22px;display:block;line-height:1.2}
     <input id="p-store" placeholder="例如：Starbucks、Amazon、航空里程" list="store-list" autocomplete="off">
     <label class="lbl">點數餘額</label>
     <input id="p-pts" type="number" inputmode="numeric" placeholder="例如：1250">
+    <label class="lbl">會員卡號／條碼號碼（可空）</label>
+    <input id="p-code" placeholder="例如：會員卡條碼下方的數字" autocomplete="off">
     <label class="lbl">備註（可空）</label>
     <input id="p-note" placeholder="例如：約值 $12、年底到期">
     <div class="row" style="margin-top:12px"><button class="btn btn-primary" id="p-save" style="flex:1">儲存</button><button class="btn" id="p-cancel" style="display:none">取消編輯</button></div>
@@ -181,10 +185,20 @@ nav.tabs .ic{font-size:22px;display:block;line-height:1.2}
   </div>
   <div class="card">
     <h3 style="margin-top:0">關於</h3>
-    <div class="muted small">家帳 v2：自住房、出租房與平時收支記帳，可日結、月結、年結，含修理工名錄、折價券與 reward 點數紀錄。金額單位為美元。</div>
+    <div class="muted small">家帳 v3：自住房、出租房與平時收支記帳，可日結、月結、年結，含修理工名錄、折價券與 reward 點數紀錄（可存條碼號碼並顯示條碼）。金額單位為美元。</div>
   </div>
 </section>
 </main>
+<div id="bc-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:950;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:16px;padding:20px;width:92%;max-width:430px;text-align:center">
+    <div id="bc-title" style="font-weight:700;font-size:17px"></div>
+    <div id="bc-sub" class="muted small"></div>
+    <canvas id="bc-canvas" width="660" height="170" style="width:100%;height:auto;margin:14px 0 6px"></canvas>
+    <div id="bc-num" style="font-size:21px;letter-spacing:2px;font-weight:700;word-break:break-all"></div>
+    <div class="muted small" style="margin-top:6px">把螢幕亮度調高，比較好掃</div>
+    <button class="btn btn-primary" id="bc-close" style="width:100%;margin-top:12px">關閉</button>
+  </div>
+</div>
 <nav class="tabs">
   <button data-tab="home" class="active"><span class="ic">🏠</span>總覽</button>
   <button data-tab="detail"><span class="ic">✏️</span>明細</button>
@@ -542,10 +556,15 @@ function renderPerks(){
     return '<div class="item'+(c.used?" used":"")+'" data-cedit="'+c.id+'"><div class="nm"><b>'+esc(c.store)+'</b>'+
       ' <span class="muted small">'+esc(c.title||"")+'</span>'+
       '<br><span class="muted small">'+(c.exp?"到期 "+c.exp:"無到期日")+(c.note?" · "+esc(c.note):"")+'</span></div>'+
+      (c.code?'<button class="btn" data-bcc="'+c.id+'" style="padding:4px 10px;font-size:13px;white-space:nowrap">條碼</button>':"")+
       couponBadge(c)+
       '<span class="del" data-cuse="'+c.id+'" style="color:var(--grn);font-size:15px">'+(c.used?"↩":"✓")+'</span>'+
       '<span class="del" data-cdel="'+c.id+'">✕</span></div>';
   }).join(""):'<span class="muted small">還沒有記錄</span>';
+  $("#coupon-list").querySelectorAll("[data-bcc]").forEach(x=>x.onclick=ev=>{
+    ev.stopPropagation();
+    const c=S.coupons.find(v=>v.id===x.getAttribute("data-bcc"));if(c&&c.code)showBarcode(c.store,c.title||"折價券",c.code);
+  });
   $("#coupon-list").querySelectorAll("[data-cuse]").forEach(x=>x.onclick=ev=>{
     ev.stopPropagation();
     const c=S.coupons.find(v=>v.id===x.getAttribute("data-cuse"));if(!c)return;
@@ -560,7 +579,7 @@ function renderPerks(){
     const c=S.coupons.find(v=>v.id===x.getAttribute("data-cedit"));if(!c)return;
     cEditId=c.id;
     $("#cform-title").textContent="✏️ 編輯折價券";
-    $("#c-store").value=c.store;$("#c-title").value=c.title||"";$("#c-exp").value=c.exp||"";$("#c-note").value=c.note||"";
+    $("#c-store").value=c.store;$("#c-title").value=c.title||"";$("#c-code").value=c.code||"";$("#c-exp").value=c.exp||"";$("#c-note").value=c.note||"";
     $("#c-cancel").style.display="";
     window.scrollTo({top:0,behavior:"smooth"});
   });
@@ -570,8 +589,13 @@ function renderPerks(){
       (p.note?'<br><span class="muted small">'+esc(p.note)+'</span>':"")+
       (p.updated?'<br><span class="muted small">更新：'+p.updated+'</span>':"")+
       '</div><div class="num"><b>'+(+p.pts||0).toLocaleString("en-US")+'</b> <span class="muted small">點</span></div>'+
+      (p.code?'<button class="btn" data-bpc="'+p.id+'" style="padding:4px 10px;font-size:13px;white-space:nowrap">條碼</button>':"")+
       '<span class="del" data-pdel="'+p.id+'">✕</span></div>';
   }).join(""):'<span class="muted small">還沒有記錄</span>';
+  $("#point-list").querySelectorAll("[data-bpc]").forEach(x=>x.onclick=ev=>{
+    ev.stopPropagation();
+    const p=S.points.find(v=>v.id===x.getAttribute("data-bpc"));if(p&&p.code)showBarcode(p.store,"Reward 點數",p.code);
+  });
   $("#point-list").querySelectorAll("[data-pdel]").forEach(x=>x.onclick=ev=>{
     ev.stopPropagation();
     if(!confirm("刪除這個點數記錄？"))return;
@@ -581,24 +605,26 @@ function renderPerks(){
     const p=S.points.find(v=>v.id===x.getAttribute("data-pedit"));if(!p)return;
     pEditId=p.id;
     $("#pform-title").textContent="✏️ 編輯點數";
-    $("#p-store").value=p.store;$("#p-pts").value=p.pts;$("#p-note").value=p.note||"";
+    $("#p-store").value=p.store;$("#p-pts").value=p.pts;$("#p-code").value=p.code||"";$("#p-note").value=p.note||"";
     $("#p-cancel").style.display="";
   });
 }
 function resetCouponForm(){
   cEditId=null;$("#cform-title").textContent="＋ 新增折價券";
-  $("#c-store").value="";$("#c-title").value="";$("#c-exp").value="";$("#c-note").value="";
+  $("#c-store").value="";$("#c-title").value="";$("#c-code").value="";$("#c-exp").value="";$("#c-note").value="";
   $("#c-cancel").style.display="none";
 }
 function resetPointForm(){
   pEditId=null;$("#pform-title").textContent="＋ 新增點數";
-  $("#p-store").value="";$("#p-pts").value="";$("#p-note").value="";
+  $("#p-store").value="";$("#p-pts").value="";$("#p-code").value="";$("#p-note").value="";
   $("#p-cancel").style.display="none";
 }
 $("#c-save").onclick=()=>{
   const store=$("#c-store").value.trim();
   if(!store){toast("請輸入商店");return;}
-  const data={store:store,title:$("#c-title").value.trim(),exp:$("#c-exp").value||"",note:$("#c-note").value.trim()};
+  const code=$("#c-code").value.trim();
+  if(code&&!c128codes(code)){toast("條碼號碼只能用英文字母、數字和符號");return;}
+  const data={store:store,title:$("#c-title").value.trim(),code:code,exp:$("#c-exp").value||"",note:$("#c-note").value.trim()};
   if(cEditId){const c=S.coupons.find(v=>v.id===cEditId);if(c)Object.assign(c,data);toast("已更新");}
   else{S.coupons.push(Object.assign({id:Date.now()+""+Math.floor(Math.random()*1000),used:false},data));toast("已新增折價券");}
   save();resetCouponForm();renderPerks();renderHome();
@@ -610,12 +636,53 @@ $("#p-save").onclick=()=>{
   if($("#p-pts").value===""){toast("請輸入點數");return;}
   const pts=+$("#p-pts").value;
   if(!(pts>=0)){toast("點數不能是負數");return;}
-  const data={store:store,pts:pts,note:$("#p-note").value.trim(),updated:todayISO()};
+  const pcode=$("#p-code").value.trim();
+  if(pcode&&!c128codes(pcode)){toast("條碼號碼只能用英文字母、數字和符號");return;}
+  const data={store:store,pts:pts,code:pcode,note:$("#p-note").value.trim(),updated:todayISO()};
   if(pEditId){const p=S.points.find(v=>v.id===pEditId);if(p)Object.assign(p,data);toast("已更新");}
   else{S.points.push(Object.assign({id:Date.now()+""+Math.floor(Math.random()*1000)},data));toast("已新增點數");}
   save();resetPointForm();renderPerks();renderHome();
 };
 $("#p-cancel").onclick=()=>resetPointForm();
+const C128=["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
+function c128codes(text){
+  const vals=[];
+  for(const ch of String(text)){
+    const code=ch.charCodeAt(0);
+    if(code<32||code>126)return null;
+    vals.push(code-32);
+  }
+  if(!vals.length)return null;
+  let sum=104;
+  vals.forEach((v,i)=>{sum+=(i+1)*v;});
+  return [104].concat(vals,[sum%103,106]);
+}
+function drawBarcode(canvas,text){
+  const codes=c128codes(text);
+  if(!codes)return false;
+  const ctx=canvas.getContext("2d");
+  const quiet=10;
+  let total=quiet*2;
+  codes.forEach(c=>{C128[c].split("").forEach(d=>{total+=+d;});});
+  const W=canvas.width,H=canvas.height,mw=W/total;
+  ctx.fillStyle="#ffffff";ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#000000";
+  let x=quiet*mw;
+  codes.forEach(c=>{
+    let bar=true;
+    C128[c].split("").forEach(d=>{const w=+d*mw;if(bar)ctx.fillRect(x,0,w,H);x+=w;bar=!bar;});
+  });
+  return true;
+}
+function showBarcode(title,sub,code){
+  if(!drawBarcode($("#bc-canvas"),code)){toast("這個條碼號碼無法顯示");return;}
+  $("#bc-title").textContent=title;
+  $("#bc-sub").textContent=sub||"";
+  $("#bc-num").textContent=code;
+  $("#bc-modal").style.display="flex";
+}
+$("#bc-close").onclick=()=>{$("#bc-modal").style.display="none";};
+$("#bc-modal").onclick=e=>{if(e.target&&e.target.id==="bc-modal")$("#bc-modal").style.display="none";};
 function renderAll(){renderHome();renderDetail();renderSettle();renderWorkers();renderPerks();}
 document.querySelectorAll("nav.tabs button").forEach(b=>b.onclick=()=>showTab(b.getAttribute("data-tab")));
 $("#f-date").value=todayISO();
